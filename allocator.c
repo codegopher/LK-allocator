@@ -6,15 +6,16 @@
 #include <sys/syscall.h>
 #include <string.h> // memset, memcpy
 #include <errno.h>
-#include <math.h>
 
-// gcc -fpic -shared -g allocator.c -o alloc && gcc test.c  -g -o run && LD_PRELOAD=./alloc ps - тест
+// gcc -fpic -shared -g allocator.c -o alloc && LD_PRELOAD=./alloc ls - тест
+// Работают: ls
+// Не работают: ping(out of memory с errno), ps (выводится только первый процесс)
 
 // Все переопределяемые функции изначально определены в stdlib.h
 
 void *seg_start; // Начало и конец сегмента данных приложения
 void *seg_end;
-int wasinit = 0; // флаг инициализированности. Иначе просто не вышло
+char wasinit = 0; // флаг инициализированности. Иначе просто не вышло
 extern int errno; // Оно же так работает,правда?
 
 // Будем писать информацию о блоке непосредственно перед ним
@@ -53,21 +54,25 @@ void init(){
   ptr_syswrite(seg_end);
   str_syswrite("-tail ");
   int_syswrite(inf_offset);
-  str_syswrite("-struct size\n");
-    int_syswrite(errno);
-    str_syswrite("-errno"); // errno = 2 уже здесь
+  str_syswrite("-struct size ");
+  int_syswrite(errno);
+  str_syswrite("-initerrno \n"); // errno = 2 изначально, но не всегда. WTF?
+  errno = 0;
 }
 
 void* malloc(size_t size){
   if (wasinit == 0) {init();} // увы, пришлось так
-  str_syswrite(" malloc ");
+  str_syswrite(" malloc: ");
+    int_syswrite(errno);
+    str_syswrite("-errno_mstart ");
   size = size + inf_offset;
   int allocsize = CEILING(size/4.0) << 2; // Выравниваем
   void* current_pos = seg_start; // Текущее "местонахождение"
   void* mem_to_return; // Что вернем
   char found = 0; // Подходящий блок найден
   struct block_inf *current_inf; // Информация о текущем блоке
-  
+  int_syswrite(errno);
+  str_syswrite("-errno_wstart ");
   int_syswrite(allocsize);
   str_syswrite("-size ");
 
@@ -85,6 +90,8 @@ void* malloc(size_t size){
     str_syswrite("-cursize "); // Для отладки
     ptr_syswrite(current_inf);
     str_syswrite("-curpos ");
+    int_syswrite(errno);
+    str_syswrite("-errno_wend ");
   }
 
   if (found == 0){ // Не найден нужный блок, придется выделять
@@ -102,6 +109,8 @@ void* malloc(size_t size){
   if (errno){ // Если выделение провалилось, sbrk() изменит errno.
   // Надеюсь, что его меняет тут только sbrk()
     str_syswrite("\n\n ----sbrk error ");
+    int_syswrite(allocsize);
+    str_syswrite("-size ");
     ptr_syswrite(seg_start);
     str_syswrite("-start ");
     ptr_syswrite(seg_end);
@@ -111,14 +120,12 @@ void* malloc(size_t size){
     int_syswrite(errno);
     str_syswrite("-errno");
     str_syswrite(" sbrk error----\n\n");
-    mem_to_return = NULL; // Вернем NULL
+    mem_to_return = NULL;
   }
   else{ // Если все нормально
     current_inf = mem_to_return;
     current_inf->avaliable = 0; // Блок больше не доступен
     mem_to_return = mem_to_return + inf_offset; // Чтобы не попортить блок информации
-
-
   }
     ptr_syswrite(mem_to_return);
     str_syswrite("-returned\n"); 
@@ -139,13 +146,20 @@ void free(void* ptr){ // Объявил перед realloc, потому что 
 
 if (wasinit == 0) {init();}
   str_syswrite("free: ");
+    int_syswrite(errno);
+    str_syswrite("-errno_fstart ");
+  str_syswrite("releasing ");
   if(ptr){
     struct block_inf *del;
     del = ptr - inf_offset;
     del->avaliable = 1;
+    int_syswrite(del->size);
+    str_syswrite(" bytes at ");
   }
   ptr_syswrite(ptr);
-  str_syswrite(" released\n");
+  str_syswrite(" ");
+    int_syswrite(errno);
+    str_syswrite("-errno_fend \n");
 }
 
 void* realloc(void* ptr, size_t size){
